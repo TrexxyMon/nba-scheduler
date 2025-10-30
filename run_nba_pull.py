@@ -76,16 +76,27 @@ def log_result(tab: str, status: str, note: str = ""):
 
 # ---------- Google Sheets auth ----------
 import gspread
-from google.auth import default
+from google.oauth2.service_account import Credentials
 from gspread_dataframe import set_with_dataframe
 
 # Ensure no stray proxies leak into Google auth
 for k in ("HTTP_PROXY","HTTPS_PROXY","http_proxy","https_proxy"):
     os.environ.pop(k, None)
 
-creds, _ = default()  # reads GOOGLE_APPLICATION_CREDENTIALS
+# Explicit scopes are REQUIRED in CI (Drive scope needed for open(name) lookup)
+SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive",
+]
+
+sa_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+if not sa_path or not os.path.exists(sa_path):
+    raise RuntimeError("GOOGLE_APPLICATION_CREDENTIALS not set or file not found.")
+
+creds = Credentials.from_service_account_file(sa_path, scopes=SCOPES)
 gc = gspread.authorize(creds)
-print("✅ Google Sheets auth OK")
+print("✅ Google Sheets auth OK (scoped)")
+
 
 def get_or_create_spreadsheet(name: str):
     try:
