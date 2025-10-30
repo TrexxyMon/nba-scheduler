@@ -362,6 +362,7 @@ except gspread.WorksheetNotFound:
                         measure_type=api_measure
                     )
                     write_df(sh, tab, df)
+                   sheets_pause()
                     log_result(tab, "OK", f"{len(df)} rows")
                 except Exception as e:
                     print("❌", tab, "->", e)
@@ -383,6 +384,7 @@ except gspread.WorksheetNotFound:
                         point_diff=POINT_DIFF
                     )
                     write_df(sh, tab, df)
+                   sheets_pause()
                     log_result(tab, "OK", f"{len(df)} rows")
                 except Exception as e:
                     print("❌", tab, "->", e)
