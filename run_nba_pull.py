@@ -95,6 +95,8 @@ SCOPES = [
 ]
 
 sa_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+if not sa_path or not os.path.exists(sa_path):
+    raise RuntimeError("GOOGLE_APPLICATION_CREDENTIALS not set or file not found.")
 creds = Credentials.from_service_account_file(sa_path, scopes=SCOPES)
 gc = gspread.authorize(creds)
 print("✅ Google Sheets auth OK")
@@ -119,9 +121,11 @@ def write_df(sh, title, df):
     ws.clear()
     if df.empty:
         ws.update("A1", [["(no data)"]])
+        print(f"⚠️ Wrote empty tab: {title}")
         return
     sheets_pause()
     set_with_dataframe(ws, df, include_index=False, include_column_header=True, resize=True)
+    print(f"✅ Wrote tab: {title} ({len(df)} rows)")
 
 def ensure_run_log_sheet(sh):
     try:
@@ -141,7 +145,6 @@ def flush_run_log(sh):
         ws = sh.worksheet(RUN_LOG_SHEET)
         sheets_pause()
         ws.append_rows(RUN_LOG, value_input_option="RAW")
-
         # prune
         sheets_pause()
         vals = ws.get_all_values()
@@ -150,7 +153,6 @@ def flush_run_log(sh):
             to_delete = total - RUN_LOG_KEEP_LAST
             sheets_pause()
             ws.delete_rows(2, 1+to_delete)
-
     except Exception as e:
         print(f"⚠️ Run_Log failed (ignored): {e}")
     finally:
@@ -164,7 +166,10 @@ from nba_api.stats.endpoints import leaguedashteamstats, leaguedashteamclutch
 
 NBAStatsHTTP.HEADERS = {
     "Host": "stats.nba.com",
-    "User-Agent": "Mozilla/5.0",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+    "Accept": "application/json, text/plain, */*",
+    "Referer": "https://www.nba.com/stats/",
+    "Origin": "https://www.nba.com",
     "x-nba-stats-origin": "stats",
     "x-nba-stats-token": "true",
 }
@@ -178,67 +183,116 @@ def use_proxy():
         old_https = os.environ.get("HTTPS_PROXY")
         os.environ["HTTP_PROXY"] = proxy
         os.environ["HTTPS_PROXY"] = proxy
-        try: yield
+        try:
+            yield
         finally:
-            if old_http: os.environ["HTTP_PROXY"]=old_http
-            else: os.environ.pop("HTTP_PROXY",None)
-            if old_https: os.environ["HTTPS_PROXY"]=old_https
-            else: os.environ.pop("HTTPS_PROXY",None)
+            if old_http is not None: os.environ["HTTP_PROXY"] = old_http
+            else: os.environ.pop("HTTP_PROXY", None)
+            if old_https is not None: os.environ["HTTPS_PROXY"] = old_https
+            else: os.environ.pop("HTTPS_PROXY", None)
     else:
         yield
 
 def sleep_backoff(n):
     time.sleep(0.9*n + random.random()*0.5)
 
-def kw_last10(cls, n):
-    params = inspect.signature(cls.__init__).parameters
-    if "last_n_games" in params:
-        return {"last_n_games": n}
-    if "game_scope" in params:
-        return {"game_scope": "Last 10"}
-    return {}
+def set_kw(kwargs: dict, cls, candidates, value):
+    """Pick the first param name that exists on cls.__init__ and set it."""
+    params = set(inspect.signature(cls.__init__).parameters.keys())
+    for name in candidates:
+        if name in params:
+            kwargs[name] = value
+            return True
+    return False
 
 ############################################
 # FETCHERS
 ############################################
-def fetch_general(per_mode, measure):
+def fetch_general(per_mode, measure_label):
+    # Map our label (e.g., "FourFactors") to API phrase ("Four Factors")
+    api_measure = GENERAL_LABEL_TO_API[measure_label]
     C = leaguedashteamstats.LeagueDashTeamStats
-    for attempt in range(1,8):
+
+    for attempt in range(1, 8):
         try:
             with use_proxy():
-                resp = C(
-                    season=SEASON,
-                    pace_adjust="N", plus_minus="N", rank="N",
-                    **{"season_type_all_star":SEASON_TYPE} if "season_type_all_star" in inspect.signature(C.__init__).parameters else {"season_type":SEASON_TYPE},
-                    **({"per_mode_detailed":per_mode} if "per_mode_detailed" in inspect.signature(C.__init__).parameters else {"per_mode":per_mode}),
-                    **({"measure_type_detailed":measure} if "measure_type_detailed" in inspect.signature(C.__init__).parameters else {"measure_type":measure}),
-                    **kw_last10(C,LAST_N_GAMES)
-                )
-                return resp.get_data_frames()[0]
+                kwargs = {
+                    "season": SEASON,
+                    "pace_adjust": "N",
+                    "plus_minus": "N",
+                    "rank": "N",
+                }
+
+                # season_type / season_type_all_star
+                set_kw(kwargs, C, ["season_type_all_star", "season_type"], SEASON_TYPE)
+
+                # per_mode
+                set_kw(kwargs, C, ["per_mode_detailed", "per_mode"], per_mode)
+
+                # measure_type (defense sometimes uses a dedicated kw)
+                if measure_label == "Defense":
+                    ok = set_kw(kwargs, C,
+                                ["measure_type_detailed_defense", "measure_type_detailed", "measure_type"],
+                                api_measure)
+                else:
+                    ok = set_kw(kwargs, C, ["measure_type_detailed", "measure_type"], api_measure)
+                if not ok:
+                    raise RuntimeError("No compatible measure_type kw found")
+
+                # last 10 overall (prefer explicit param, else game_scope)
+                if not set_kw(kwargs, C, ["last_n_games", "last_n_games_nullable"], LAST_N_GAMES):
+                    set_kw(kwargs, C, ["game_scope", "game_scope_nullable"], "Last 10")
+
+                resp = C(**kwargs)
+                df = resp.get_data_frames()[0]
+                if df is None or df.empty:
+                    raise RuntimeError("Empty dataframe from API")
+                return df
+
         except Exception as e:
-            if attempt==7: raise
-            print(f"[general retry {attempt}] {measure} {per_mode}: {e}")
+            if attempt == 7:
+                raise
+            print(f"[general retry {attempt}] {api_measure} {per_mode}: {e}")
             sleep_backoff(attempt)
 
-def fetch_clutch(per_mode, measure):
+def fetch_clutch(per_mode, measure_label):
+    api_measure = CLUTCH_LABEL_TO_API[measure_label]
     C = leaguedashteamclutch.LeagueDashTeamClutch
-    for attempt in range(1,8):
+
+    for attempt in range(1, 8):
         try:
             with use_proxy():
-                resp = C(
-                    season=SEASON,
-                    season_type=SEASON_TYPE,
-                    clutch_time=CLUTCH_TIME,
-                    ahead_behind=AHEAD_BEHIND,
-                    point_diff=POINT_DIFF,
-                    pace_adjust="N", plus_minus="N", rank="N",
-                    game_scope="Last 10", last_n_games=LAST_N_GAMES,
-                    per_mode=per_mode, measure_type=measure
-                )
-                return resp.get_data_frames()[0]
+                kwargs = {
+                    "season": SEASON,
+                    "clutch_time": CLUTCH_TIME,
+                    "ahead_behind": AHEAD_BEHIND,
+                    "point_diff": POINT_DIFF,
+                    "pace_adjust": "N",
+                    "plus_minus": "N",
+                    "rank": "N",
+                    "game_scope": "Last 10",
+                    "last_n_games": LAST_N_GAMES,
+                }
+
+                # season_type key differs on some versions
+                set_kw(kwargs, C, ["season_type_all_star", "season_type"], SEASON_TYPE)
+
+                # per_mode may be per_mode_time on this endpoint
+                set_kw(kwargs, C, ["per_mode_time", "per_mode"], per_mode)
+
+                # measure_type may be measure_type_time on this endpoint
+                set_kw(kwargs, C, ["measure_type_time", "measure_type"], api_measure)
+
+                resp = C(**kwargs)
+                df = resp.get_data_frames()[0]
+                if df is None or df.empty:
+                    raise RuntimeError("Empty dataframe from clutch API")
+                return df
+
         except Exception as e:
-            if attempt==7: raise
-            print(f"[clutch retry {attempt}] {measure} {per_mode}: {e}")
+            if attempt == 7:
+                raise
+            print(f"[clutch retry {attempt}] {api_measure} {per_mode}: {e}")
             sleep_backoff(attempt)
 
 ############################################
@@ -250,36 +304,38 @@ def main():
     ensure_run_log_sheet(sh)
 
     # 6AM guard
-    if RUN_ANYTIME!="1" and now.hour != 6:
+    if RUN_ANYTIME != "1" and now.hour != 6:
         msg = f"Skip: NY time {now}"
         print(msg)
-        log_result("RUN_GUARD","SKIP",msg)
+        log_result("RUN_GUARD", "SKIP", msg)
         flush_run_log(sh)
         return
 
     # GENERAL
     for per_mode in PER_MODES:
         for label in GENERAL_MEASURE_TYPES:
-            api_measure = GENERAL_LABEL_TO_API[label]
             tab = f"NBA_GEN_{label}_{per_mode}_L{LAST_N_GAMES}"
             try:
-                df = fetch_general(per_mode, api_measure)
+                df = fetch_general(per_mode, label)
                 write_df(sh, tab, df)
-                log_result(tab,"OK",f"{len(df)} rows")
+                log_result(tab, "OK", f"{len(df)} rows")
+                sheets_pause()
             except Exception as e:
-                log_result(tab,"FAIL",str(e))
+                print(f"❌ {tab} -> {e}")
+                log_result(tab, "FAIL", str(e))
 
     # CLUTCH
     for per_mode in PER_MODES:
         for label in CLUTCH_MEASURE_TYPES:
-            api_measure = CLUTCH_LABEL_TO_API[label]
             tab = f"NBA_CLUTCH_{label}_{per_mode}_L{LAST_N_GAMES}"
             try:
-                df = fetch_clutch(per_mode, api_measure)
+                df = fetch_clutch(per_mode, label)
                 write_df(sh, tab, df)
-                log_result(tab,"OK",f"{len(df)} rows")
+                log_result(tab, "OK", f"{len(df)} rows")
+                sheets_pause()
             except Exception as e:
-                log_result(tab,"FAIL",str(e))
+                print(f"❌ {tab} -> {e}")
+                log_result(tab, "FAIL", str(e))
 
     flush_run_log(sh)
     print("✅ Done")
