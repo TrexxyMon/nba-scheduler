@@ -9,6 +9,7 @@ on:
 jobs:
   run:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -48,12 +49,15 @@ jobs:
           RUN_LOG_SHEET: "Run_Log"
           RUN_LOG_KEEP_LAST: "5000"
 
+          # Sheets write throttle (helps avoid 429s)
+          SHEETS_WRITE_PAUSE_SEC: "1.2"
+
           # Manual run bypass (true only on manual dispatch)
           RUN_ANYTIME: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
 
-          # Proxies (optional; leave blank to skip)
+          # Proxies (optional; leave secrets blank to skip)
           PROXY_USER: ${{ secrets.PROXY_USER }}
           PROXY_PASS: ${{ secrets.PROXY_PASS }}
           PROXY_HOST: ${{ secrets.PROXY_HOST }}
-          PROXY_PORTS: ${{ secrets.PROXY_PORTS }}  # e.g. 10001,10002,10003,...
+          PROXY_PORTS: ${{ secrets.PROXY_PORTS }}  # e.g. 10001,10002,10003
         run: python run_nba_pull.py
