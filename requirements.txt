@@ -1,0 +1,6 @@
+nba_api
+gspread
+gspread_dataframe
+pandas
+google-auth
+pytz
