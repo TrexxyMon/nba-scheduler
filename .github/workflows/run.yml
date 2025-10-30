@@ -1,0 +1,45 @@
+name: NBA Pull @ 6AM New York
+
+on:
+  schedule:
+    - cron: '0 10 * * *'   # 6am when EDT (UTC-4)
+    - cron: '0 11 * * *'   # 6am when EST (UTC-5)
+  workflow_dispatch: {}
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install deps
+        run: pip install -r requirements.txt
+
+      - name: Write Google creds file
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS_JSON: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS_JSON }}
+        run: |
+          echo "$GOOGLE_APPLICATION_CREDENTIALS_JSON" > creds.json
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$(pwd)/creds.json" >> $GITHUB_ENV
+
+      - name: Run script
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ env.GOOGLE_APPLICATION_CREDENTIALS }}
+          SPREADSHEET_NAME: "NBA Model"
+          SEASON: "2025-26"
+          SEASON_TYPE: "Regular Season"
+          LAST_N_GAMES: "10"
+          CLUTCH_TIME: "Last 5 Minutes"
+          AHEAD_BEHIND: "Ahead or Behind"
+          POINT_DIFF: "5"
+          PROXY_USER: ${{ secrets.PROXY_USER }}
+          PROXY_PASS: ${{ secrets.PROXY_PASS }}
+          PROXY_HOST: ${{ secrets.PROXY_HOST }}
+          PROXY_PORTS: ${{ secrets.PROXY_PORTS }}  # e.g. 10001,10002,10003,...
+        run: python run_nba_pull.py
