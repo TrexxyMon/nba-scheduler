@@ -127,6 +127,16 @@ def write_df(sh, title, df):
     set_with_dataframe(ws, df, include_index=False, include_column_header=True, resize=True)
     print(f"✅ Wrote tab: {title} ({len(df)} rows)")
 
+def dump_signatures():
+    try:
+        from nba_api.stats.endpoints import leaguedashteamstats as _g, leaguedashteamclutch as _c
+        g_params = list(inspect.signature(_g.LeagueDashTeamStats.__init__).parameters.keys())
+        c_params = list(inspect.signature(_c.LeagueDashTeamClutch.__init__).parameters.keys())
+        print("🧭 LeagueDashTeamStats params:", g_params)
+        print("🧭 LeagueDashTeamClutch params:", c_params)
+    except Exception as e:
+        print("🧭 Param dump failed:", e)
+
 def ensure_run_log_sheet(sh):
     try:
         sheets_pause()
