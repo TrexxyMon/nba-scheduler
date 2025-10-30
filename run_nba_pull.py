@@ -113,15 +113,23 @@ def get_or_create_spreadsheet(name: str):
         return gc.create(name)
 
 def write_df(sh, title: str, df: pd.DataFrame):
+    # Throttle before metadata calls
+    sheets_pause()
     try:
         ws = sh.worksheet(title)
     except gspread.WorksheetNotFound:
+        # Throttle before add_worksheet
+        sheets_pause()
         ws = sh.add_worksheet(title=title, rows=max(len(df)+5, 50), cols=max(len(df.columns)+5, 26))
+    # Throttle before clear
+    sheets_pause()
     ws.clear()
     if df.empty:
         ws.update("A1", [["(no data)"]])
         print(f"⚠️ Wrote empty tab: {title}")
         return
+    # Throttle before bulk write
+    sheets_pause()
     set_with_dataframe(ws, df, include_index=False, include_column_header=True, resize=True)
     print(f"✅ Wrote tab: {title} ({len(df)} rows)")
 
@@ -130,25 +138,42 @@ def flush_run_log(sh):
         return
     try:
         try:
+            sheets_pause()
             ws = sh.worksheet(RUN_LOG_SHEET)
             new_ws = False
         except gspread.WorksheetNotFound:
+            # create early to avoid hitting quota later
+            sheets_pause()
             ws = sh.add_worksheet(title=RUN_LOG_SHEET, rows=100, cols=4)
             new_ws = True
+
         if new_ws:
+            sheets_pause()
             ws.update("A1:D1", [["timestamp_ny", "status", "tab", "note"]])
+
+        sheets_pause()
         ws.append_rows(RUN_LOG, value_input_option="RAW")
+
         # prune to last N
         try:
+            sheets_pause()
             existing = ws.get_all_values()
             total = len(existing) - 1
             if total > RUN_LOG_KEEP_LAST:
                 to_delete = total - RUN_LOG_KEEP_LAST
+                sheets_pause()
                 ws.delete_rows(2, 1 + to_delete)
         except Exception:
             pass
+    except Exception as e:
+        # If we still hit quota, do not fail the whole job
+        if "429" in str(e):
+            print("⚠️ Run_Log skipped due to Sheets 429 rate limit.")
+        else:
+            print(f"⚠️ Run_Log write skipped: {e}")
     finally:
         RUN_LOG.clear()
+
 
 # ---------- NBA headers + proxy/backoff ----------
 from nba_api.stats.library.http import NBAStatsHTTP
