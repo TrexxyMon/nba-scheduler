@@ -312,16 +312,19 @@ def main():
     sh = get_sheet()
     ensure_run_log_sheet(sh)
 
-    if os.getenv("DEBUG_NBA_SIGNATURES", "0") == "1":
+    # ---- SAFETY: Only run during 6–7am New York unless manual trigger ----
+if DEBUG_NBA_SIGNATURES:
     dump_signatures()
 
-    # 6AM guard
-    if RUN_ANYTIME != "1" and now.hour != 6:
-        msg = f"Skip: NY time {now}"
-        print(msg)
-        log_result("RUN_GUARD", "SKIP", msg)
+if not RUN_ANYTIME:
+    now_et = pytz.utc.localize(datetime.utcnow()).astimezone(pytz.timezone("America/New_York"))
+    if not (now_et.hour == 6 or now_et.hour == 7):  # allow 1 hour buffer
+        log_run("SKIP", "Outside run window")
         flush_run_log(sh)
+        print("⏳ Outside run window — exiting.")
         return
+# ---------------------------------------------------------------------
+
 
     # GENERAL
     for per_mode in PER_MODES:
