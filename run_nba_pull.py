@@ -324,6 +324,20 @@ def fetch_leaguedashteamclutch_last10_overall(
 # ---------- Main ----------
 def main():
     sh = get_or_create_spreadsheet(SPREADSHEET_NAME)
+   
+# Pre-create log sheet early (less chance to hit quota later)
+try:
+    sheets_pause()
+    _ = sh.worksheet(RUN_LOG_SHEET)
+except gspread.WorksheetNotFound:
+    try:
+        sheets_pause()
+        ws_log = sh.add_worksheet(title=RUN_LOG_SHEET, rows=100, cols=4)
+        sheets_pause()
+        ws_log.update("A1:D1", [["timestamp_ny", "status", "tab", "note"]])
+    except Exception as e:
+        print(f"⚠️ Could not pre-create Run_Log (will retry at flush): {e}")
+
 
     # 6AM guard AFTER auth so we can log SKIP and create Run_Log
     now_ny = datetime.now(NY_TZ)
