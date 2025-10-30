@@ -9,6 +9,7 @@ on:
 jobs:
   run:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
 
     steps:
       - name: Checkout
@@ -18,9 +19,17 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
 
       - name: Install deps
-        run: pip install -r requirements.txt
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          else
+            # Fallback (pin to stable versions if no requirements.txt present)
+            pip install nba_api==1.4.1 pandas==2.2.2 gspread==6.1.2 gspread_dataframe==3.3.1 google-auth==2.34.0 google-auth-oauthlib==1.2.1 requests==2.32.3 pytz==2024.1
+          fi
 
       - name: Write Google creds file
         env:
@@ -29,39 +38,39 @@ jobs:
           echo "$GOOGLE_APPLICATION_CREDENTIALS_JSON" > creds.json
           echo "GOOGLE_APPLICATION_CREDENTIALS=$(pwd)/creds.json" >> $GITHUB_ENV
 
-     - name: Run script
-  env:
-    # Google auth
-    GOOGLE_APPLICATION_CREDENTIALS: ${{ env.GOOGLE_APPLICATION_CREDENTIALS }}
+      - name: Run script
+        env:
+          # Google auth
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ env.GOOGLE_APPLICATION_CREDENTIALS }}
 
-    # Core config
-    SPREADSHEET_NAME: "NBA Model"
-    SEASON: "2025-26"
-    SEASON_TYPE: "Regular Season"
-    LAST_N_GAMES: "10"
+          # Core config
+          SPREADSHEET_NAME: "NBA Model"
+          SEASON: "2025-26"
+          SEASON_TYPE: "Regular Season"
+          LAST_N_GAMES: "10"
 
-    # Clutch config
-    CLUTCH_TIME: "Last 5 Minutes"
-    AHEAD_BEHIND: "Ahead or Behind"
-    POINT_DIFF: "5"
+          # Clutch config
+          CLUTCH_TIME: "Last 5 Minutes"
+          AHEAD_BEHIND: "Ahead or Behind"
+          POINT_DIFF: "5"
 
-    # Run Log config
-    RUN_LOG_SHEET: "Run_Log"
-    RUN_LOG_KEEP_LAST: "5000"
+          # Run Log config
+          RUN_LOG_SHEET: "Run_Log"
+          RUN_LOG_KEEP_LAST: "5000"
 
-    # Sheets write throttle (helps avoid 429s)
-    SHEETS_WRITE_PAUSE_SEC: "1.2"
+          # Sheets write throttle (helps avoid 429s)
+          SHEETS_WRITE_PAUSE_SEC: "1.2"
 
-    # Manual run bypass (true only on manual dispatch)
-    RUN_ANYTIME: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
+          # Manual run bypass (true only on manual dispatch)
+          RUN_ANYTIME: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
 
-    # Proxies (optional; leave secrets blank to skip)
-    PROXY_USER: ${{ secrets.PROXY_USER }}
-    PROXY_PASS: ${{ secrets.PROXY_PASS }}
-    PROXY_HOST: ${{ secrets.PROXY_HOST }}
-    PROXY_PORTS: ${{ secrets.PROXY_PORTS }}  # e.g. 10001,10002,10003
+          # Proxies (optional; leave secrets blank to skip)
+          PROXY_USER: ${{ secrets.PROXY_USER }}
+          PROXY_PASS: ${{ secrets.PROXY_PASS }}
+          PROXY_HOST: ${{ secrets.PROXY_HOST }}
+          PROXY_PORTS: ${{ secrets.PROXY_PORTS }}  # e.g. 10001,10002,10003
 
-    # 🔎 Debug (add these two)
-    DEBUG_NBA_SIGNATURES: "1"          # turn OFF (0) after the next run
-    PIP_DISABLE_PIP_VERSION_CHECK: "1"
-  run: python run_nba_pull.py
+          # Debug (enable for next run; set to "0" after you confirm)
+          DEBUG_NBA_SIGNATURES: "1"
+          PIP_DISABLE_PIP_VERSION_CHECK: "1"
+        run: python run_nba_pull.py
