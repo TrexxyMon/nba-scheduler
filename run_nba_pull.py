@@ -3,15 +3,22 @@
 
 """
 NBA Stats → Google Sheets automation
-- 2025-26 Regular Season
-- Last 10 games (overall; no location split)
-- PerGame & Per100Possessions
-- General (Advanced, Four Factors, Misc, Scoring, Opponent, Defense) + Clutch (Advanced, Four Factors, Misc, Scoring, Opponent)
-- Writes to Google Sheet "NBA Model" (configurable)
-- Run Log tab with outcomes and notes
-- Sheets API write throttling to avoid 429s
-- Optional proxy rotation for NBA API
-- 6AM New York daily guard (bypass with RUN_ANYTIME=1)
+
+- Season: 2025-26 (configurable via SEASON)
+- Season Type: Regular Season
+- Window: Last 10 games (overall; no location split)
+- PerModes: PerGame & Per100Possessions
+- Endpoints:
+    * LeagueDashTeamStats (General: Advanced, Four Factors, Misc, Scoring, Opponent, Defense)
+    * LeagueDashTeamClutch (Clutch: Advanced, Four Factors, Misc, Scoring, Opponent)
+- Writes tabs into a Google Sheet (default "NBA Model")
+- Adds Run_Log tab with timestamp/status/tab/note
+- Throttles Sheets writes to avoid 429s
+- Optional proxy rotation for NBA API requests
+- 6AM New York daily safety gate (set RUN_ANYTIME=1 to bypass)
+
+NEW:
+- Clutch tabs now left-join to a 30-team index so teams without clutch minutes still appear with zeros.
 """
 
 import os
@@ -305,14 +312,14 @@ def fetch_clutch(per_mode: str, measure_label: str) -> pd.DataFrame:
                 if not set_kw(kwargs, C, ["measure_type_time", "measure_type", "measure_type_detailed_defense"], api_measure):
                     raise RuntimeError("No compatible clutch measure_type kw found")
 
-                # For last 10, most builds accept last_n_games; some accept game_scope (but many don't).
-                # Prefer last_n_games only; omit game_scope to avoid TypeErrors.
+                # Last 10 for clutch: most builds accept last_n_games; avoid game_scope (often not accepted)
                 set_kw(kwargs, C, ["last_n_games", "last_n_games_nullable"], LAST_N_GAMES)
 
                 resp = C(**kwargs)
                 df = resp.get_data_frames()[0]
                 if df is None or df.empty:
-                    raise RuntimeError("Empty dataframe from clutch API")
+                    # When zero clutch minutes for everyone (unlikely), return empty and let filler handle it
+                    return df
                 return df
 
         except Exception as e:
@@ -320,6 +327,62 @@ def fetch_clutch(per_mode: str, measure_label: str) -> pd.DataFrame:
                 raise
             print(f"[clutch retry {attempt}] {api_measure} {per_mode}: {e}")
             sleep_backoff(attempt)
+
+# =========================
+# TEAM INDEX + CLUTCH FILL
+# =========================
+TEAM_INDEX_CACHE = None
+
+def get_team_index() -> pd.DataFrame:
+    """
+    Build a reliable 30-team index via LeagueDashTeamStats (no clutch filter).
+    Returns columns: TEAM_ID, TEAM_NAME
+    """
+    global TEAM_INDEX_CACHE
+    if TEAM_INDEX_CACHE is not None:
+        return TEAM_INDEX_CACHE
+
+    C = leaguedashteamstats.LeagueDashTeamStats
+    kwargs = {
+        "season": SEASON,
+        "pace_adjust": "N",
+        "plus_minus": "N",
+        "rank": "N",
+    }
+    # season_type & per_mode
+    set_kw(kwargs, C, ["season_type_all_star", "season_type"], SEASON_TYPE)
+    set_kw(kwargs, C, ["per_mode_detailed", "per_mode"], "PerGame")
+    # measure type (use robust candidate list)
+    set_kw(kwargs, C, ["measure_type_detailed_defense", "measure_type_detailed", "measure_type"], "Advanced")
+    # full season (no last_10 restriction)
+    set_kw(kwargs, C, ["last_n_games", "last_n_games_nullable"], 0)
+
+    df = C(**kwargs).get_data_frames()[0]
+    idx = df[["TEAM_ID", "TEAM_NAME"]].drop_duplicates().reset_index(drop=True)
+    TEAM_INDEX_CACHE = idx
+    return TEAM_INDEX_CACHE
+
+def ensure_all_teams_for_clutch(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Merge clutch df onto the 30-team index; fill missing numeric columns with 0
+    so every tab shows all teams even if they had 0 clutch minutes in the window.
+    """
+    idx = get_team_index()
+    # Prefer merge on TEAM_ID when present; fallback to TEAM_NAME
+    if df is None or df.empty:
+        out = idx.copy()
+        # No clutch rows; create all-zero numeric columns later when writing/using
+        return out
+
+    on_cols = ["TEAM_ID"] if "TEAM_ID" in df.columns else ["TEAM_NAME"]
+    out = idx.merge(df, on=on_cols, how="left")
+
+    # Fill numeric columns with 0 when missing (no clutch minutes → zero rates/counts)
+    num_cols = out.select_dtypes(include=["number"]).columns.tolist()
+    if num_cols:
+        out[num_cols] = out[num_cols].fillna(0)
+
+    return out
 
 # =========================
 # MAIN
@@ -355,12 +418,13 @@ def main():
                 print(f"❌ {tab} -> {e}")
                 log_result(tab, "FAIL", str(e))
 
-    # CLUTCH
+    # CLUTCH (ensure all 30 teams)
     for per_mode in PER_MODES:
         for label in CLUTCH_MEASURE_TYPES:
             tab = f"NBA_CLUTCH_{label}_{per_mode}_L{LAST_N_GAMES}"
             try:
                 df = fetch_clutch(per_mode, label)
+                df = ensure_all_teams_for_clutch(df)
                 write_df(sh, tab, df)
                 log_result(tab, "OK", f"{len(df)} rows")
                 sheets_pause()
