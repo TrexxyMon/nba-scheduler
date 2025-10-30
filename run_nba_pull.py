@@ -33,6 +33,14 @@ CLUTCH_TIME        = os.getenv("CLUTCH_TIME", "Last 5 Minutes")
 AHEAD_BEHIND       = os.getenv("AHEAD_BEHIND", "Ahead or Behind")  # must be this for overall
 POINT_DIFF         = int(os.getenv("POINT_DIFF", "5"))
 
+# Throttle between Sheets writes to avoid 429s (seconds)
+SHEETS_WRITE_PAUSE_SEC = float(os.getenv("SHEETS_WRITE_PAUSE_SEC", "1.2"))
+
+def sheets_pause():
+    if SHEETS_WRITE_PAUSE_SEC > 0:
+        time.sleep(SHEETS_WRITE_PAUSE_SEC)
+
+
 # Proxies (optional; leave blank to skip)
 PROXY_USER         = os.getenv("PROXY_USER", "")
 PROXY_PASS         = os.getenv("PROXY_PASS", "")
