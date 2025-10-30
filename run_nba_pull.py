@@ -312,6 +312,9 @@ def main():
     sh = get_sheet()
     ensure_run_log_sheet(sh)
 
+    if os.getenv("DEBUG_NBA_SIGNATURES", "0") == "1":
+    dump_signatures()
+
     # 6AM guard
     if RUN_ANYTIME != "1" and now.hour != 6:
         msg = f"Skip: NY time {now}"
