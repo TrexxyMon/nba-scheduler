@@ -71,6 +71,6 @@ jobs:
           PROXY_PORTS: ${{ secrets.PROXY_PORTS }}  # e.g. 10001,10002,10003
 
           # Debug (enable for next run; set to "0" after you confirm)
-          DEBUG_NBA_SIGNATURES: "1"
+          DEBUG_NBA_SIGNATURES: "0"
           PIP_DISABLE_PIP_VERSION_CHECK: "1"
         run: python run_nba_pull.py
