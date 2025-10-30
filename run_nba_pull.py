@@ -226,20 +226,16 @@ def fetch_general(per_mode, measure_label):
                 # season_type / season_type_all_star
                 set_kw(kwargs, C, ["season_type_all_star", "season_type"], SEASON_TYPE)
 
-                # per_mode
+                # per_mode (detailed fallback)
                 set_kw(kwargs, C, ["per_mode_detailed", "per_mode"], per_mode)
 
-                # measure_type (defense sometimes uses a dedicated kw)
-                if measure_label == "Defense":
-                    ok = set_kw(kwargs, C,
-                                ["measure_type_detailed_defense", "measure_type_detailed", "measure_type"],
-                                api_measure)
-                else:
-                    ok = set_kw(kwargs, C, ["measure_type_detailed", "measure_type"], api_measure)
-                if not ok:
+                # IMPORTANT: some nba_api builds ONLY expose measure_type_detailed_defense
+                # so try it first even for non-defense, then fall back.
+                candidates = ["measure_type_detailed_defense", "measure_type_detailed", "measure_type"]
+                if not set_kw(kwargs, C, candidates, api_measure):
                     raise RuntimeError("No compatible measure_type kw found")
 
-                # last 10 overall (prefer explicit param, else game_scope)
+                # Last 10 overall
                 if not set_kw(kwargs, C, ["last_n_games", "last_n_games_nullable"], LAST_N_GAMES):
                     set_kw(kwargs, C, ["game_scope", "game_scope_nullable"], "Last 10")
 
@@ -254,6 +250,7 @@ def fetch_general(per_mode, measure_label):
                 raise
             print(f"[general retry {attempt}] {api_measure} {per_mode}: {e}")
             sleep_backoff(attempt)
+
 
 def fetch_clutch(per_mode, measure_label):
     api_measure = CLUTCH_LABEL_TO_API[measure_label]
@@ -270,18 +267,19 @@ def fetch_clutch(per_mode, measure_label):
                     "pace_adjust": "N",
                     "plus_minus": "N",
                     "rank": "N",
-                    "game_scope": "Last 10",
+                    # Many builds DO NOT accept game_scope → omit it.
                     "last_n_games": LAST_N_GAMES,
                 }
 
-                # season_type key differs on some versions
+                # season_type key differs by build
                 set_kw(kwargs, C, ["season_type_all_star", "season_type"], SEASON_TYPE)
 
                 # per_mode may be per_mode_time on this endpoint
                 set_kw(kwargs, C, ["per_mode_time", "per_mode"], per_mode)
 
-                # measure_type may be measure_type_time on this endpoint
-                set_kw(kwargs, C, ["measure_type_time", "measure_type"], api_measure)
+                # measure_type may be measure_type_time on this endpoint — try both, plus the defense variant just in case
+                if not set_kw(kwargs, C, ["measure_type_time", "measure_type", "measure_type_detailed_defense"], api_measure):
+                    raise RuntimeError("No compatible clutch measure_type kw found")
 
                 resp = C(**kwargs)
                 df = resp.get_data_frames()[0]
@@ -294,6 +292,7 @@ def fetch_clutch(per_mode, measure_label):
                 raise
             print(f"[clutch retry {attempt}] {api_measure} {per_mode}: {e}")
             sleep_backoff(attempt)
+
 
 ############################################
 # MAIN
