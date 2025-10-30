@@ -15,26 +15,13 @@ NBA Stats → Google Sheets (Daily @ 6AM America/New_York via GitHub Actions)
     * Robust parameter handling across nba_api versions
     * Overwrites tabs
     * Run Log tab (append-only + auto-trim)
-    * 6AM New York guard (handles DST)
+    * 6AM New York guard with manual-bypass (RUN_ANYTIME=1)
 """
 
-import os
-import random
-import time
-import contextlib
-import inspect
-import sys
+import os, random, time, contextlib, inspect, sys
 from datetime import datetime
-
 import pandas as pd
 import pytz
-
-# ---------- 6AM America/New_York guard ----------
-NY_TZ = pytz.timezone("America/New_York")
-_now_ny = datetime.now(NY_TZ)
-if _now_ny.hour != 6:
-    print(f"Exiting: NY time is {_now_ny.strftime('%Y-%m-%d %H:%M:%S')}, not 06:00.")
-    sys.exit(0)
 
 # ---------- Config (override via env in Actions) ----------
 SEASON             = os.getenv("SEASON", "2025-26")
@@ -78,6 +65,9 @@ CLUTCH_LABEL_TO_API = {
 # ---------- Run Log helpers ----------
 RUN_LOG_SHEET = os.getenv("RUN_LOG_SHEET", "Run_Log")
 RUN_LOG_KEEP_LAST = int(os.getenv("RUN_LOG_KEEP_LAST", "5000"))
+RUN_ANYTIME = os.getenv("RUN_ANYTIME", "0")  # '1' bypasses the 6am guard
+
+NY_TZ = pytz.timezone("America/New_York")
 RUN_LOG = []
 
 def log_result(tab: str, status: str, note: str = ""):
@@ -291,6 +281,15 @@ def fetch_leaguedashteamclutch_last10_overall(
 def main():
     sh = get_or_create_spreadsheet(SPREADSHEET_NAME)
 
+    # 6AM guard AFTER auth so we can log SKIP and create Run_Log
+    now_ny = datetime.now(NY_TZ)
+    if RUN_ANYTIME != "1" and now_ny.hour != 6:
+        msg = f"NY time {now_ny.strftime('%Y-%m-%d %H:%M:%S')} not 06:00 — skipping run"
+        print(msg)
+        log_result("RUN_GUARD", "SKIP", msg)
+        flush_run_log(sh)
+        return
+
     try:
         # General
         for per_mode in PER_MODES:
@@ -333,7 +332,6 @@ def main():
 
         print("🎯 All done.")
     finally:
-        # Always flush log so failures are recorded
         flush_run_log(sh)
 
 if __name__ == "__main__":
