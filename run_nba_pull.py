@@ -334,13 +334,13 @@ def main():
 
     # 6–8 AM ET run window, unless manual trigger
     if RUN_ANYTIME != "1":
-    now_et = datetime.now(NY_TZ)
-    if not (6 <= now_et.hour < 8):  # allow 2-hour window
-        note = f"Skip: NY time {now_et.strftime('%Y-%m-%d %H:%M:%S')}"
-        print(note)
-        log_result("RUN_GUARD", "SKIP", note)
-        flush_run_log(sh)
-        return
+        now_et = datetime.now(NY_TZ)
+        if not (6 <= now_et.hour < 8):  # allow 2-hour window
+            note = f"Skip: NY time {now_et.strftime('%Y-%m-%d %H:%M:%S')}"
+            print(note)
+            log_result("RUN_GUARD", "SKIP", note)
+            flush_run_log(sh)
+            return
 
     # GENERAL
     for per_mode in PER_MODES:
