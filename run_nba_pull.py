@@ -235,67 +235,38 @@ def set_kw(kwargs: dict, cls, candidates, value) -> bool:
 # =========================
 def fetch_general(per_mode: str, measure_label: str) -> pd.DataFrame:
     """
-    Robust caller for LeagueDashTeamStats across nba_api versions.
+    LeagueDashTeamStats caller for this specific nba_api build.
 
-    NOTE: On the version running in GitHub Actions, Last N Games is
-    very likely ignored by the endpoint, so this is effectively
-    "season to date" even though we try to hint LAST_N_GAMES.
+    Uses:
+      - per_mode_detailed
+      - measure_type_detailed_defense
+      - game_scope_simple_nullable="Last 10 Games"
+
+    NOTE: If NBA's backend ever ignores game_scope_simple_nullable,
+    this will silently become season-to-date again.
     """
     api_measure = GENERAL_LABEL_TO_API[measure_label]
-    C = leaguedashteamstats.LeagueDashTeamStats
 
     for attempt in range(1, 8):
         try:
             with use_proxy():
-                kwargs = {
-                    "season": SEASON,
-                    "pace_adjust": "N",
-                    "plus_minus": "N",
-                    "rank": "N",
-                }
+                resp = leaguedashteamstats.LeagueDashTeamStats(
+                    season=SEASON,
+                    season_type_all_star=SEASON_TYPE,
+                    per_mode_detailed=per_mode,                 # "PerGame" / "Per100Possessions"
+                    measure_type_detailed_defense=api_measure,  # "Advanced", "Four Factors", etc.
+                    game_scope_simple_nullable=f"Last {LAST_N_GAMES} Games",
+                    pace_adjust="N",
+                    plus_minus="N",
+                    rank="N",
+                    # everything else left as default/null
+                )
 
-                # season_type key drifts between versions
-                set_kw(kwargs, C, ["season_type_all_star", "season_type"], SEASON_TYPE)
-
-                # per_mode key can be per_mode_detailed or per_mode
-                set_kw(kwargs, C, ["per_mode_detailed", "per_mode"], per_mode)
-
-                # measure_type: a bunch of historical key names
-                # (some builds only expose measure_type_detailed_defense)
-                if not set_kw(
-                    kwargs,
-                    C,
-                    [
-                        "measure_type_detailed_defense",
-                        "measure_type_detailed",
-                        "measure_type",
-                    ],
-                    api_measure,
-                ):
-                    raise RuntimeError("No compatible measure_type kw found")
-
-                # Try Last N Games → if no compatible param, silently skip.
-                if not set_kw(
-                    kwargs,
-                    C,
-                    ["last_n_games", "last_n_games_nullable"],
-                    LAST_N_GAMES,
-                ):
-                    # Some older builds used game_scope="Last 10"
-                    set_kw(
-                        kwargs,
-                        C,
-                        ["game_scope", "game_scope_nullable"],
-                        "Last 10",
-                    )
-
-                resp = C(**kwargs)
                 df = resp.get_data_frames()[0]
                 if df is None or df.empty:
-                    raise RuntimeError("Empty dataframe from GENERAL API")
+                    raise RuntimeError("Empty dataframe from LeagueDashTeamStats")
 
-                # OPTIONAL: if you want to strip WNBA/other leagues on the Python side
-                # NBA team IDs start with 161061; WNBA are 161166.
+                # Keep only NBA teams (TEAM_ID starting with 161061)
                 if "TEAM_ID" in df.columns:
                     df = df[df["TEAM_ID"].astype(str).str.startswith("161061")]
 
@@ -304,65 +275,43 @@ def fetch_general(per_mode: str, measure_label: str) -> pd.DataFrame:
         except Exception as e:
             if attempt == 7:
                 raise
-            print(f"[general retry {attempt}] {api_measure} {per_mode}: {e}")
+            print(f"[general retry {attempt}] {measure_label} {per_mode}: {e}")
             sleep_backoff(attempt)
 
 
 def fetch_clutch(per_mode: str, measure_label: str) -> pd.DataFrame:
     """
-    Robust caller for LeagueDashTeamClutch across nba_api versions.
+    LeagueDashTeamClutch caller for this specific nba_api build.
 
-    IMPORTANT:
-    - Some nba_api versions do NOT expose any per_mode/per_mode_time
-      parameter on LeagueDashTeamClutch. In that case we simply do NOT
-      pass a per_mode kw at all and rely on the endpoint default.
+    Uses:
+      - per_mode_detailed
+      - measure_type_detailed_defense
+      - last_n_games (for L10 clutch sample)
     """
     api_measure = CLUTCH_LABEL_TO_API[measure_label]
-    C = leaguedashteamclutch.LeagueDashTeamClutch
 
     for attempt in range(1, 8):
         try:
             with use_proxy():
-                kwargs = {
-                    "season": SEASON,
-                    "clutch_time": CLUTCH_TIME,
-                    "ahead_behind": AHEAD_BEHIND,
-                    "point_diff": POINT_DIFF,
-                    "pace_adjust": "N",
-                    "plus_minus": "N",
-                    "rank": "N",
-                }
-
-                # season_type key may be season_type_all_star
-                set_kw(kwargs, C, ["season_type_all_star", "season_type"], SEASON_TYPE)
-
-                # DO NOT force any per_mode kw – many builds don't have it.
-                # (We keep the `per_mode` variable only for naming the tab.)
-
-                # measure_type is all over the place; try several names
-                if not set_kw(
-                    kwargs,
-                    C,
-                    ["measure_type_time", "measure_type", "measure_type_detailed_defense"],
-                    api_measure,
-                ):
-                    raise RuntimeError("No compatible measure_type kw found for clutch")
-
-                # Try Last N Games – same deal as GENERAL: if params not there,
-                # endpoint just returns season-to-date clutch.
-                set_kw(
-                    kwargs,
-                    C,
-                    ["last_n_games", "last_n_games_nullable"],
-                    LAST_N_GAMES,
+                resp = leaguedashteamclutch.LeagueDashTeamClutch(
+                    season=SEASON,
+                    season_type_all_star=SEASON_TYPE,
+                    per_mode_detailed=per_mode,                 # "PerGame" / "Per100Possessions"
+                    measure_type_detailed_defense=api_measure,  # "Advanced", "Four Factors", etc.
+                    clutch_time=CLUTCH_TIME,
+                    ahead_behind=AHEAD_BEHIND,
+                    point_diff=POINT_DIFF,
+                    last_n_games=LAST_N_GAMES,
+                    pace_adjust="N",
+                    plus_minus="N",
+                    rank="N",
+                    # rest left default / nullable
                 )
 
-                resp = C(**kwargs)
                 df = resp.get_data_frames()[0]
                 if df is None or df.empty:
-                    raise RuntimeError("Empty dataframe from CLUTCH API")
+                    raise RuntimeError("Empty dataframe from LeagueDashTeamClutch")
 
-                # Again, strip non-NBA teams if present
                 if "TEAM_ID" in df.columns:
                     df = df[df["TEAM_ID"].astype(str).str.startswith("161061")]
 
@@ -371,7 +320,7 @@ def fetch_clutch(per_mode: str, measure_label: str) -> pd.DataFrame:
         except Exception as e:
             if attempt == 7:
                 raise
-            print(f"[clutch retry {attempt}] {api_measure} {per_mode}: {e}")
+            print(f"[clutch retry {attempt}] {measure_label} {per_mode}: {e}")
             sleep_backoff(attempt)
 
 
