@@ -216,22 +216,33 @@ def dump_signatures():
         print("🧭 LeagueDashTeamClutch params:", c_params)
     except Exception as e:
         print("🧭 Param dump failed:", e)
-
+        
+def set_kw(kwargs: dict, cls, candidates, value) -> bool:
+    """
+    Try each candidate name against the class constructor.
+    If a name exists in the signature, set kwargs[name] = value and return True.
+    Otherwise return False.
+    """
+    params = set(inspect.signature(cls.__init__).parameters.keys())
+    for name in candidates:
+        if name in params:
+            kwargs[name] = value
+            return True
+    return False
+    
 # =========================
 # FETCHERS
 # =========================
 def fetch_general(per_mode: str, measure_label: str) -> pd.DataFrame:
     """
     Robust caller for LeagueDashTeamStats across nba_api versions.
-    - Uses measure_type / per_mode explicitly (no *_detailed variants)
-    - Handles season_type / last_n_games naming drift via introspection
-    - No league_id passed (avoids unexpected keyword errors)
+
+    - Uses set_kw to pick the correct parameter names
+    - Forces Last N games via last_n_games / last_n_games_nullable
+    - No league_id; WNBA can be filtered out in Sheets if needed
     """
     api_measure = GENERAL_LABEL_TO_API[measure_label]
     C = leaguedashteamstats.LeagueDashTeamStats
-
-    # Cache the signature once per process
-    params = set(inspect.signature(C.__init__).parameters.keys())
 
     for attempt in range(1, 8):
         try:
@@ -241,38 +252,41 @@ def fetch_general(per_mode: str, measure_label: str) -> pd.DataFrame:
                     "pace_adjust": "N",
                     "plus_minus": "N",
                     "rank": "N",
-                    # These names are stable in the underlying API
-                    "per_mode": per_mode,
-                    "measure_type": api_measure,
                 }
 
-                # season_type key drifts between versions
-                if "season_type_all_star" in params:
-                    kwargs["season_type_all_star"] = SEASON_TYPE
-                elif "season_type" in params:
-                    kwargs["season_type"] = SEASON_TYPE
+                # season_type vs season_type_all_star
+                set_kw(kwargs, C, ["season_type_all_star", "season_type"], SEASON_TYPE)
 
-                # Last N games: prefer explicit last_n_games; fall back to nullable; last resort game_scope
-                if "last_n_games" in params:
-                    kwargs["last_n_games"] = LAST_N_GAMES
-                elif "last_n_games_nullable" in params:
-                    kwargs["last_n_games_nullable"] = LAST_N_GAMES
-                elif "game_scope" in params or "game_scope_nullable" in params:
-                    # Some older builds only support game_scope="Last 10"
-                    if "game_scope" in params:
-                        kwargs["game_scope"] = f"Last {LAST_N_GAMES}"
-                    else:
-                        kwargs["game_scope_nullable"] = f"Last {LAST_N_GAMES}"
+                # per_mode: per_mode_detailed or per_mode
+                if not set_kw(kwargs, C, ["per_mode_detailed", "per_mode"], per_mode):
+                    raise RuntimeError("No compatible per_mode kw found")
+
+                # measure_type: some builds only expose measure_type_detailed_defense
+                if not set_kw(
+                    kwargs,
+                    C,
+                    ["measure_type_detailed", "measure_type_detailed_defense", "measure_type"],
+                    api_measure,
+                ):
+                    raise RuntimeError("No compatible measure_type kw found")
+
+                # Last N games – REQUIRED, no game_scope fallback
+                if not set_kw(
+                    kwargs,
+                    C,
+                    ["last_n_games", "last_n_games_nullable"],
+                    LAST_N_GAMES,
+                ):
+                    raise RuntimeError("No compatible last_n_games kw found")
 
                 resp = C(**kwargs)
                 df = resp.get_data_frames()[0]
                 if df is None or df.empty:
-                    raise RuntimeError("Empty dataframe from API")
+                    raise RuntimeError("Empty dataframe from LeagueDashTeamStats")
                 return df
 
         except Exception as e:
             if attempt == 7:
-                # Let the caller log + record failure
                 raise
             print(f"[general retry {attempt}] {api_measure} {per_mode}: {e}")
             sleep_backoff(attempt)
@@ -281,14 +295,13 @@ def fetch_general(per_mode: str, measure_label: str) -> pd.DataFrame:
 def fetch_clutch(per_mode: str, measure_label: str) -> pd.DataFrame:
     """
     Robust caller for LeagueDashTeamClutch across nba_api versions.
-    - Uses measure_type / per_mode explicitly
-    - Handles season_type / last_n_games name drift via introspection
-    - No league_id passed
+
+    - Uses set_kw to pick correct parameter names
+    - Forces Last N games via last_n_games / last_n_games_nullable
+    - No league_id
     """
     api_measure = CLUTCH_LABEL_TO_API[measure_label]
     C = leaguedashteamclutch.LeagueDashTeamClutch
-
-    params = set(inspect.signature(C.__init__).parameters.keys())
 
     for attempt in range(1, 8):
         try:
@@ -301,29 +314,37 @@ def fetch_clutch(per_mode: str, measure_label: str) -> pd.DataFrame:
                     "pace_adjust": "N",
                     "plus_minus": "N",
                     "rank": "N",
-                    # Stable names
-                    "per_mode": per_mode,
-                    "measure_type": api_measure,
                 }
 
                 # season_type vs season_type_all_star
-                if "season_type_all_star" in params:
-                    kwargs["season_type_all_star"] = SEASON_TYPE
-                elif "season_type" in params:
-                    kwargs["season_type"] = SEASON_TYPE
+                set_kw(kwargs, C, ["season_type_all_star", "season_type"], SEASON_TYPE)
 
-                # Last N games handling
-                if "last_n_games" in params:
-                    kwargs["last_n_games"] = LAST_N_GAMES
-                elif "last_n_games_nullable" in params:
-                    kwargs["last_n_games_nullable"] = LAST_N_GAMES
-                # For clutch, many builds *don’t* support game_scope, so we skip it
-                # to avoid more unexpected keyword errors.
+                # per_mode: some builds use per_mode_time, some use per_mode
+                if not set_kw(kwargs, C, ["per_mode_time", "per_mode"], per_mode):
+                    raise RuntimeError("No compatible per_mode kw found for clutch")
+
+                # measure_type: measure_type_time / measure_type / measure_type_detailed_defense
+                if not set_kw(
+                    kwargs,
+                    C,
+                    ["measure_type_time", "measure_type", "measure_type_detailed_defense"],
+                    api_measure,
+                ):
+                    raise RuntimeError("No compatible clutch measure_type kw found")
+
+                # Last N games – REQUIRED
+                if not set_kw(
+                    kwargs,
+                    C,
+                    ["last_n_games", "last_n_games_nullable"],
+                    LAST_N_GAMES,
+                ):
+                    raise RuntimeError("No compatible clutch last_n_games kw found")
 
                 resp = C(**kwargs)
                 df = resp.get_data_frames()[0]
                 if df is None or df.empty:
-                    raise RuntimeError("Empty dataframe from clutch API")
+                    raise RuntimeError("Empty dataframe from LeagueDashTeamClutch")
                 return df
 
         except Exception as e:
