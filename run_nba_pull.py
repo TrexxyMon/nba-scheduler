@@ -235,56 +235,61 @@ def set_kw(kwargs: dict, cls, candidates, value) -> bool:
 # =========================
 def fetch_general(per_mode: str, measure_label: str) -> pd.DataFrame:
     """
-    LeagueDashTeamStats caller for Last N Games (teams) for this nba_api build.
-
-    - Uses last_n_games=LAST_N_GAMES (games, not days)
-    - per_mode_detailed: 'PerGame' / 'Per100Possessions'
-    - measure_type_detailed_defense: 'Advanced', 'Four Factors', etc.
+    LeagueDashTeamStats for Teams / General.
+    Uses SeasonSegment='Last N Games' to match the website's Last 10 filter.
     """
     api_measure = GENERAL_LABEL_TO_API[measure_label]
+    C = leaguedashteamstats.LeagueDashTeamStats
+
+    # This mirrors the UI: Season Segment -> "Last 10 Games", etc.
+    season_segment_value = None
+    if LAST_N_GAMES > 0:
+        season_segment_value = f"Last {LAST_N_GAMES} Games"
 
     for attempt in range(1, 8):
         try:
             with use_proxy():
-                resp = leaguedashteamstats.LeagueDashTeamStats(
-                    season=SEASON,
-                    season_type_all_star=SEASON_TYPE,
-                    pace_adjust="N",
-                    plus_minus="N",
-                    rank="N",
+                kwargs = {
+                    "season": SEASON,
+                    "pace_adjust": "N",
+                    "plus_minus": "N",
+                    "rank": "N",
+                }
 
-                    # key filters:
-                    per_mode_detailed=per_mode,
-                    measure_type_detailed_defense=api_measure,
-                    last_n_games=LAST_N_GAMES,        # <-- Last N GAMES
-                    # IMPORTANT: do NOT set game_scope_simple_nullable here
-                )
+                # Season type key drift
+                set_kw(kwargs, C, ["season_type_all_star", "season_type"], SEASON_TYPE)
 
-                df_list = resp.get_data_frames()
-                if not df_list:
-                    raise RuntimeError("No data frames returned from LeagueDashTeamStats")
+                # Per-mode key drift
+                set_kw(kwargs, C, ["per_mode_detailed", "per_mode"], per_mode)
 
-                df = df_list[0]
+                # Measure type drift (defense-only kw on some builds)
+                if not set_kw(
+                    kwargs,
+                    C,
+                    ["measure_type_detailed_defense", "measure_type_detailed", "measure_type"],
+                    api_measure,
+                ):
+                    raise RuntimeError("No compatible measure_type kw found")
+
+                # Use Season Segment for Last N Games (how the website does it)
+                if season_segment_value:
+                    set_kw(
+                        kwargs,
+                        C,
+                        ["season_segment_nullable", "season_segment"],
+                        season_segment_value,
+                    )
+
+                resp = C(**kwargs)
+                df = resp.get_data_frames()[0]
                 if df is None or df.empty:
-                    raise RuntimeError("Empty dataframe from LeagueDashTeamStats")
-
-                # Strip WNBA / other leagues: keep only NBA team IDs
-                if "TEAM_ID" in df.columns:
-                    df = df[df["TEAM_ID"].astype(str).str.startswith("161061")]
-
-                # Debug: see what GP values we’re actually getting
-                try:
-                    gps = sorted(df["GP"].astype(int).unique().tolist())
-                    print(f"🔎 General {measure_label} {per_mode} GP values: {gps}")
-                except Exception:
-                    pass
-
-                return df.reset_index(drop=True)
+                    raise RuntimeError("Empty dataframe from API")
+                return df
 
         except Exception as e:
             if attempt == 7:
                 raise
-            print(f"[general retry {attempt}] {measure_label} {per_mode}: {e}")
+            print(f"[general retry {attempt}] {api_measure} {per_mode}: {e}")
             sleep_backoff(attempt)
 
 
