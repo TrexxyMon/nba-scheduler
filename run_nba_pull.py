@@ -222,8 +222,9 @@ def dump_signatures():
 # =========================
 def fetch_general(per_mode: str, measure_label: str) -> pd.DataFrame:
     """
-    LeagueDashTeamStats with explicit params.
-    Forces Last N Games and NBA-only (LeagueID='00').
+    Robust caller for LeagueDashTeamStats.
+    - Explicit params (no introspection)
+    - Forces Last N Games using LAST_N_GAMES
     """
     api_measure = GENERAL_LABEL_TO_API[measure_label]
 
@@ -232,17 +233,18 @@ def fetch_general(per_mode: str, measure_label: str) -> pd.DataFrame:
             with use_proxy():
                 resp = leaguedashteamstats.LeagueDashTeamStats(
                     season=SEASON,
-                    season_type_all_star=SEASON_TYPE,   # Regular Season / Playoffs etc
-                    league_id=LEAGUE_ID,                # "00" = NBA; avoids WNBA/G-League
-                    per_mode_detailed=per_mode,         # "PerGame", "Per100Possessions"
-                    measure_type_detailed=api_measure,  # "Advanced", "Four Factors", etc.
-                    last_n_games=LAST_N_GAMES,          # <-- hard force L10
+                    season_type_all_star=SEASON_TYPE,   # "Regular Season", etc.
+                    per_mode_detailed=per_mode,         # "PerGame" / "Per100Possessions"
+                    measure_type_detailed=api_measure,  # "Advanced", "Four Factors", ...
+                    last_n_games=LAST_N_GAMES,          # <-- L10 filter
                     pace_adjust="N",
                     plus_minus="N",
                     rank="N",
                 )
-                # Safer than get_data_frames()[0] if nba_api changes dataset order later
-                df = resp.league_dash_team_stats.get_data_frame()
+                df_list = resp.get_data_frames()
+                if not df_list:
+                    raise RuntimeError("No data frames returned from LeagueDashTeamStats")
+                df = df_list[0]
                 if df is None or df.empty:
                     raise RuntimeError("Empty dataframe from LeagueDashTeamStats")
                 return df
@@ -250,13 +252,15 @@ def fetch_general(per_mode: str, measure_label: str) -> pd.DataFrame:
         except Exception as e:
             if attempt == 7:
                 raise
-            print(f"[general retry {attempt}] {api_measure} {per_mode}: {e}")
+            print(f"[general retry {attempt}] {measure_label} {per_mode}: {e}")
             sleep_backoff(attempt)
+
 
 def fetch_clutch(per_mode: str, measure_label: str) -> pd.DataFrame:
     """
-    LeagueDashTeamClutch with explicit params.
-    Forces Last N Games and NBA-only.
+    Robust caller for LeagueDashTeamClutch.
+    - Explicit params (no introspection)
+    - Forces Last N Games using LAST_N_GAMES
     """
     api_measure = CLUTCH_LABEL_TO_API[measure_label]
 
@@ -266,10 +270,9 @@ def fetch_clutch(per_mode: str, measure_label: str) -> pd.DataFrame:
                 resp = leaguedashteamclutch.LeagueDashTeamClutch(
                     season=SEASON,
                     season_type_all_star=SEASON_TYPE,
-                    league_id=LEAGUE_ID,
-                    per_mode_time=per_mode,          # "PerGame", "Per100Possessions"
-                    measure_type_time=api_measure,   # "Advanced", "Four Factors", etc.
-                    last_n_games=LAST_N_GAMES,
+                    per_mode_time=per_mode,            # "PerGame" / "Per100Possessions"
+                    measure_type_time=api_measure,     # "Advanced", "Four Factors", ...
+                    last_n_games=LAST_N_GAMES,         # <-- L10 filter
                     clutch_time=CLUTCH_TIME,
                     ahead_behind=AHEAD_BEHIND,
                     point_diff=POINT_DIFF,
@@ -277,7 +280,10 @@ def fetch_clutch(per_mode: str, measure_label: str) -> pd.DataFrame:
                     plus_minus="N",
                     rank="N",
                 )
-                df = resp.league_dash_team_clutch.get_data_frame()
+                df_list = resp.get_data_frames()
+                if not df_list:
+                    raise RuntimeError("No data frames returned from LeagueDashTeamClutch")
+                df = df_list[0]
                 if df is None or df.empty:
                     raise RuntimeError("Empty dataframe from LeagueDashTeamClutch")
                 return df
@@ -285,8 +291,10 @@ def fetch_clutch(per_mode: str, measure_label: str) -> pd.DataFrame:
         except Exception as e:
             if attempt == 7:
                 raise
-            print(f"[clutch retry {attempt}] {api_measure} {per_mode}: {e}")
+            print(f"[clutch retry {attempt}] {measure_label} {per_mode}: {e}")
             sleep_backoff(attempt)
+
+
 
 # =========================
 # MAIN
