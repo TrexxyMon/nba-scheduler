@@ -235,15 +235,11 @@ def set_kw(kwargs: dict, cls, candidates, value) -> bool:
 # =========================
 def fetch_general(per_mode: str, measure_label: str) -> pd.DataFrame:
     """
-    LeagueDashTeamStats caller for this specific nba_api build.
+    LeagueDashTeamStats caller for this nba_api build.
 
-    Uses:
-      - per_mode_detailed
-      - measure_type_detailed_defense
-      - game_scope_simple_nullable="Last 10 Games"
-
-    NOTE: If NBA's backend ever ignores game_scope_simple_nullable,
-    this will silently become season-to-date again.
+    - Per-mode: per_mode_detailed ("PerGame" / "Per100Possessions")
+    - Measure: measure_type_detailed_defense ("Advanced", "Four Factors", etc.)
+    - Game scope: game_scope_simple_nullable="Last 10"  -> Last 10 games
     """
     api_measure = GENERAL_LABEL_TO_API[measure_label]
 
@@ -253,20 +249,23 @@ def fetch_general(per_mode: str, measure_label: str) -> pd.DataFrame:
                 resp = leaguedashteamstats.LeagueDashTeamStats(
                     season=SEASON,
                     season_type_all_star=SEASON_TYPE,
-                    per_mode_detailed=per_mode,                 # "PerGame" / "Per100Possessions"
-                    measure_type_detailed_defense=api_measure,  # "Advanced", "Four Factors", etc.
-                    game_scope_simple_nullable=f"Last {LAST_N_GAMES} Games",
+                    per_mode_detailed=per_mode,
+                    measure_type_detailed_defense=api_measure,
+                    game_scope_simple_nullable="Last 10",  # <-- key change
                     pace_adjust="N",
                     plus_minus="N",
                     rank="N",
-                    # everything else left as default/null
                 )
 
-                df = resp.get_data_frames()[0]
+                df_list = resp.get_data_frames()
+                if not df_list:
+                    raise RuntimeError("No data frames returned from LeagueDashTeamStats")
+
+                df = df_list[0]
                 if df is None or df.empty:
                     raise RuntimeError("Empty dataframe from LeagueDashTeamStats")
 
-                # Keep only NBA teams (TEAM_ID starting with 161061)
+                # Strip non-NBA teams (WNBA etc.)
                 if "TEAM_ID" in df.columns:
                     df = df[df["TEAM_ID"].astype(str).str.startswith("161061")]
 
