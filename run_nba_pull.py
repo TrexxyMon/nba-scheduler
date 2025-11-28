@@ -235,11 +235,11 @@ def set_kw(kwargs: dict, cls, candidates, value) -> bool:
 # =========================
 def fetch_general(per_mode: str, measure_label: str) -> pd.DataFrame:
     """
-    LeagueDashTeamStats caller for this nba_api build.
+    LeagueDashTeamStats caller for Last N Games (teams) for this nba_api build.
 
-    - Per-mode: per_mode_detailed ("PerGame" / "Per100Possessions")
-    - Measure: measure_type_detailed_defense ("Advanced", "Four Factors", etc.)
-    - Game scope: game_scope_simple_nullable="Last 10"  -> Last 10 games
+    - Uses last_n_games=LAST_N_GAMES (games, not days)
+    - per_mode_detailed: 'PerGame' / 'Per100Possessions'
+    - measure_type_detailed_defense: 'Advanced', 'Four Factors', etc.
     """
     api_measure = GENERAL_LABEL_TO_API[measure_label]
 
@@ -249,12 +249,15 @@ def fetch_general(per_mode: str, measure_label: str) -> pd.DataFrame:
                 resp = leaguedashteamstats.LeagueDashTeamStats(
                     season=SEASON,
                     season_type_all_star=SEASON_TYPE,
-                    per_mode_detailed=per_mode,
-                    measure_type_detailed_defense=api_measure,
-                    game_scope_simple_nullable="Last 10",  # <-- key change
                     pace_adjust="N",
                     plus_minus="N",
                     rank="N",
+
+                    # key filters:
+                    per_mode_detailed=per_mode,
+                    measure_type_detailed_defense=api_measure,
+                    last_n_games=LAST_N_GAMES,        # <-- Last N GAMES
+                    # IMPORTANT: do NOT set game_scope_simple_nullable here
                 )
 
                 df_list = resp.get_data_frames()
@@ -265,9 +268,16 @@ def fetch_general(per_mode: str, measure_label: str) -> pd.DataFrame:
                 if df is None or df.empty:
                     raise RuntimeError("Empty dataframe from LeagueDashTeamStats")
 
-                # Strip non-NBA teams (WNBA etc.)
+                # Strip WNBA / other leagues: keep only NBA team IDs
                 if "TEAM_ID" in df.columns:
                     df = df[df["TEAM_ID"].astype(str).str.startswith("161061")]
+
+                # Debug: see what GP values we’re actually getting
+                try:
+                    gps = sorted(df["GP"].astype(int).unique().tolist())
+                    print(f"🔎 General {measure_label} {per_mode} GP values: {gps}")
+                except Exception:
+                    pass
 
                 return df.reset_index(drop=True)
 
