@@ -31,6 +31,8 @@ SEASON           = os.getenv("SEASON", "2025-26")
 SEASON_TYPE      = os.getenv("SEASON_TYPE", "Regular Season")
 LAST_N_GAMES     = int(os.getenv("LAST_N_GAMES", "10"))
 SPREADSHEET_NAME = os.getenv("SPREADSHEET_NAME", "NBA Model")
+# ADD THIS:
+LEAGUE_ID        = os.getenv("LEAGUE_ID", "00")  # "00" = NBA only
 
 CLUTCH_TIME      = os.getenv("CLUTCH_TIME", "Last 5 Minutes")
 AHEAD_BEHIND     = os.getenv("AHEAD_BEHIND", "Ahead or Behind")
@@ -205,17 +207,6 @@ def use_proxy():
     else:
         yield
 
-def set_kw(kwargs: dict, cls, candidates, value) -> bool:
-    """
-    Pick the first parameter name supported by the class constructor and set it.
-    Returns True if a candidate was applied.
-    """
-    params = set(inspect.signature(cls.__init__).parameters.keys())
-    for name in candidates:
-        if name in params:
-            kwargs[name] = value
-            return True
-    return False
 
 def dump_signatures():
     try:
@@ -231,41 +222,29 @@ def dump_signatures():
 # =========================
 def fetch_general(per_mode: str, measure_label: str) -> pd.DataFrame:
     """
-    Robust caller for LeagueDashTeamStats across nba_api versions.
+    LeagueDashTeamStats with explicit params.
+    Forces Last N Games and NBA-only (LeagueID='00').
     """
     api_measure = GENERAL_LABEL_TO_API[measure_label]
-    C = leaguedashteamstats.LeagueDashTeamStats
 
     for attempt in range(1, 8):
         try:
             with use_proxy():
-                kwargs = {
-                    "season": SEASON,
-                    "pace_adjust": "N",
-                    "plus_minus": "N",
-                    "rank": "N",
-                }
-
-                # season_type key drifts between versions
-                set_kw(kwargs, C, ["season_type_all_star", "season_type"], SEASON_TYPE)
-
-                # per_mode key can be per_mode_detailed or per_mode
-                set_kw(kwargs, C, ["per_mode_detailed", "per_mode"], per_mode)
-
-                # OBSERVED QUIRK: some builds only expose measure_type_detailed_defense
-                # even for non-defense measures. Try that first, then fall back.
-                candidates = ["measure_type_detailed_defense", "measure_type_detailed", "measure_type"]
-                if not set_kw(kwargs, C, candidates, api_measure):
-                    raise RuntimeError("No compatible measure_type kw found")
-
-                # Last 10 overall: prefer explicit last_n_games; else game_scope "Last 10"; else skip
-                if not set_kw(kwargs, C, ["last_n_games", "last_n_games_nullable"], LAST_N_GAMES):
-                    set_kw(kwargs, C, ["game_scope", "game_scope_nullable"], "Last 10")
-
-                resp = C(**kwargs)
-                df = resp.get_data_frames()[0]
+                resp = leaguedashteamstats.LeagueDashTeamStats(
+                    season=SEASON,
+                    season_type_all_star=SEASON_TYPE,   # Regular Season / Playoffs etc
+                    league_id=LEAGUE_ID,                # "00" = NBA; avoids WNBA/G-League
+                    per_mode_detailed=per_mode,         # "PerGame", "Per100Possessions"
+                    measure_type_detailed=api_measure,  # "Advanced", "Four Factors", etc.
+                    last_n_games=LAST_N_GAMES,          # <-- hard force L10
+                    pace_adjust="N",
+                    plus_minus="N",
+                    rank="N",
+                )
+                # Safer than get_data_frames()[0] if nba_api changes dataset order later
+                df = resp.league_dash_team_stats.get_data_frame()
                 if df is None or df.empty:
-                    raise RuntimeError("Empty dataframe from API")
+                    raise RuntimeError("Empty dataframe from LeagueDashTeamStats")
                 return df
 
         except Exception as e:
@@ -276,43 +255,31 @@ def fetch_general(per_mode: str, measure_label: str) -> pd.DataFrame:
 
 def fetch_clutch(per_mode: str, measure_label: str) -> pd.DataFrame:
     """
-    Robust caller for LeagueDashTeamClutch across nba_api versions.
+    LeagueDashTeamClutch with explicit params.
+    Forces Last N Games and NBA-only.
     """
     api_measure = CLUTCH_LABEL_TO_API[measure_label]
-    C = leaguedashteamclutch.LeagueDashTeamClutch
 
     for attempt in range(1, 8):
         try:
             with use_proxy():
-                kwargs = {
-                    "season": SEASON,
-                    "clutch_time": CLUTCH_TIME,
-                    "ahead_behind": AHEAD_BEHIND,
-                    "point_diff": POINT_DIFF,
-                    "pace_adjust": "N",
-                    "plus_minus": "N",
-                    "rank": "N",
-                }
-
-                # season_type key may be season_type_all_star
-                set_kw(kwargs, C, ["season_type_all_star", "season_type"], SEASON_TYPE)
-
-                # per_mode can be per_mode_time or per_mode
-                set_kw(kwargs, C, ["per_mode_time", "per_mode"], per_mode)
-
-                # measure_type may be measure_type_time or measure_type
-                # Some builds only expose ..._detailed_defense; include it as last resort.
-                if not set_kw(kwargs, C, ["measure_type_time", "measure_type", "measure_type_detailed_defense"], api_measure):
-                    raise RuntimeError("No compatible clutch measure_type kw found")
-
-                # For last 10, most builds accept last_n_games; some accept game_scope (but many don't).
-                # Prefer last_n_games only; omit game_scope to avoid TypeErrors.
-                set_kw(kwargs, C, ["last_n_games", "last_n_games_nullable"], LAST_N_GAMES)
-
-                resp = C(**kwargs)
-                df = resp.get_data_frames()[0]
+                resp = leaguedashteamclutch.LeagueDashTeamClutch(
+                    season=SEASON,
+                    season_type_all_star=SEASON_TYPE,
+                    league_id=LEAGUE_ID,
+                    per_mode_time=per_mode,          # "PerGame", "Per100Possessions"
+                    measure_type_time=api_measure,   # "Advanced", "Four Factors", etc.
+                    last_n_games=LAST_N_GAMES,
+                    clutch_time=CLUTCH_TIME,
+                    ahead_behind=AHEAD_BEHIND,
+                    point_diff=POINT_DIFF,
+                    pace_adjust="N",
+                    plus_minus="N",
+                    rank="N",
+                )
+                df = resp.league_dash_team_clutch.get_data_frame()
                 if df is None or df.empty:
-                    raise RuntimeError("Empty dataframe from clutch API")
+                    raise RuntimeError("Empty dataframe from LeagueDashTeamClutch")
                 return df
 
         except Exception as e:
