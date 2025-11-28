@@ -222,76 +222,114 @@ def dump_signatures():
 # =========================
 def fetch_general(per_mode: str, measure_label: str) -> pd.DataFrame:
     """
-    Robust caller for LeagueDashTeamStats.
-    - Explicit params (no introspection)
-    - Forces Last N Games using LAST_N_GAMES
+    Robust caller for LeagueDashTeamStats across nba_api versions.
+    - Uses measure_type / per_mode explicitly (no *_detailed variants)
+    - Handles season_type / last_n_games naming drift via introspection
+    - No league_id passed (avoids unexpected keyword errors)
     """
     api_measure = GENERAL_LABEL_TO_API[measure_label]
+    C = leaguedashteamstats.LeagueDashTeamStats
+
+    # Cache the signature once per process
+    params = set(inspect.signature(C.__init__).parameters.keys())
 
     for attempt in range(1, 8):
         try:
             with use_proxy():
-                resp = leaguedashteamstats.LeagueDashTeamStats(
-                    season=SEASON,
-                    season_type_all_star=SEASON_TYPE,   # "Regular Season", etc.
-                    per_mode_detailed=per_mode,         # "PerGame" / "Per100Possessions"
-                    measure_type_detailed=api_measure,  # "Advanced", "Four Factors", ...
-                    last_n_games=LAST_N_GAMES,          # <-- L10 filter
-                    pace_adjust="N",
-                    plus_minus="N",
-                    rank="N",
-                )
-                df_list = resp.get_data_frames()
-                if not df_list:
-                    raise RuntimeError("No data frames returned from LeagueDashTeamStats")
-                df = df_list[0]
+                kwargs = {
+                    "season": SEASON,
+                    "pace_adjust": "N",
+                    "plus_minus": "N",
+                    "rank": "N",
+                    # These names are stable in the underlying API
+                    "per_mode": per_mode,
+                    "measure_type": api_measure,
+                }
+
+                # season_type key drifts between versions
+                if "season_type_all_star" in params:
+                    kwargs["season_type_all_star"] = SEASON_TYPE
+                elif "season_type" in params:
+                    kwargs["season_type"] = SEASON_TYPE
+
+                # Last N games: prefer explicit last_n_games; fall back to nullable; last resort game_scope
+                if "last_n_games" in params:
+                    kwargs["last_n_games"] = LAST_N_GAMES
+                elif "last_n_games_nullable" in params:
+                    kwargs["last_n_games_nullable"] = LAST_N_GAMES
+                elif "game_scope" in params or "game_scope_nullable" in params:
+                    # Some older builds only support game_scope="Last 10"
+                    if "game_scope" in params:
+                        kwargs["game_scope"] = f"Last {LAST_N_GAMES}"
+                    else:
+                        kwargs["game_scope_nullable"] = f"Last {LAST_N_GAMES}"
+
+                resp = C(**kwargs)
+                df = resp.get_data_frames()[0]
                 if df is None or df.empty:
-                    raise RuntimeError("Empty dataframe from LeagueDashTeamStats")
+                    raise RuntimeError("Empty dataframe from API")
                 return df
 
         except Exception as e:
             if attempt == 7:
+                # Let the caller log + record failure
                 raise
-            print(f"[general retry {attempt}] {measure_label} {per_mode}: {e}")
+            print(f"[general retry {attempt}] {api_measure} {per_mode}: {e}")
             sleep_backoff(attempt)
 
 
 def fetch_clutch(per_mode: str, measure_label: str) -> pd.DataFrame:
     """
-    Robust caller for LeagueDashTeamClutch.
-    - Explicit params (no introspection)
-    - Forces Last N Games using LAST_N_GAMES
+    Robust caller for LeagueDashTeamClutch across nba_api versions.
+    - Uses measure_type / per_mode explicitly
+    - Handles season_type / last_n_games name drift via introspection
+    - No league_id passed
     """
     api_measure = CLUTCH_LABEL_TO_API[measure_label]
+    C = leaguedashteamclutch.LeagueDashTeamClutch
+
+    params = set(inspect.signature(C.__init__).parameters.keys())
 
     for attempt in range(1, 8):
         try:
             with use_proxy():
-                resp = leaguedashteamclutch.LeagueDashTeamClutch(
-                    season=SEASON,
-                    season_type_all_star=SEASON_TYPE,
-                    per_mode_time=per_mode,            # "PerGame" / "Per100Possessions"
-                    measure_type_time=api_measure,     # "Advanced", "Four Factors", ...
-                    last_n_games=LAST_N_GAMES,         # <-- L10 filter
-                    clutch_time=CLUTCH_TIME,
-                    ahead_behind=AHEAD_BEHIND,
-                    point_diff=POINT_DIFF,
-                    pace_adjust="N",
-                    plus_minus="N",
-                    rank="N",
-                )
-                df_list = resp.get_data_frames()
-                if not df_list:
-                    raise RuntimeError("No data frames returned from LeagueDashTeamClutch")
-                df = df_list[0]
+                kwargs = {
+                    "season": SEASON,
+                    "clutch_time": CLUTCH_TIME,
+                    "ahead_behind": AHEAD_BEHIND,
+                    "point_diff": POINT_DIFF,
+                    "pace_adjust": "N",
+                    "plus_minus": "N",
+                    "rank": "N",
+                    # Stable names
+                    "per_mode": per_mode,
+                    "measure_type": api_measure,
+                }
+
+                # season_type vs season_type_all_star
+                if "season_type_all_star" in params:
+                    kwargs["season_type_all_star"] = SEASON_TYPE
+                elif "season_type" in params:
+                    kwargs["season_type"] = SEASON_TYPE
+
+                # Last N games handling
+                if "last_n_games" in params:
+                    kwargs["last_n_games"] = LAST_N_GAMES
+                elif "last_n_games_nullable" in params:
+                    kwargs["last_n_games_nullable"] = LAST_N_GAMES
+                # For clutch, many builds *don’t* support game_scope, so we skip it
+                # to avoid more unexpected keyword errors.
+
+                resp = C(**kwargs)
+                df = resp.get_data_frames()[0]
                 if df is None or df.empty:
-                    raise RuntimeError("Empty dataframe from LeagueDashTeamClutch")
+                    raise RuntimeError("Empty dataframe from clutch API")
                 return df
 
         except Exception as e:
             if attempt == 7:
                 raise
-            print(f"[clutch retry {attempt}] {measure_label} {per_mode}: {e}")
+            print(f"[clutch retry {attempt}] {api_measure} {per_mode}: {e}")
             sleep_backoff(attempt)
 
 
