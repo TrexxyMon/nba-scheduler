@@ -235,61 +235,75 @@ def set_kw(kwargs: dict, cls, candidates, value) -> bool:
 # =========================
 def fetch_general(per_mode: str, measure_label: str) -> pd.DataFrame:
     """
-    LeagueDashTeamStats for Teams / General.
-    Uses SeasonSegment='Last N Games' to match the website's Last 10 filter.
-    """
-    api_measure = GENERAL_LABEL_TO_API[measure_label]
-    C = leaguedashteamstats.LeagueDashTeamStats
+    LeagueDashTeamStats for GENERAL (Advanced/FourFactors/Misc/Scoring/Opponent/Defense)
+    using the exact arg names from the current nba_api signatures.
 
-    # This mirrors the UI: Season Segment -> "Last 10 Games", etc.
-    season_segment_value = None
-    if LAST_N_GAMES > 0:
-        season_segment_value = f"Last {LAST_N_GAMES} Games"
+    - Filters to NBA only (league_id_nullable='00')
+    - Uses last_n_games for the Last N Games filter
+    """
+
+    api_measure = GENERAL_LABEL_TO_API[measure_label]
 
     for attempt in range(1, 8):
         try:
             with use_proxy():
-                kwargs = {
-                    "season": SEASON,
-                    "pace_adjust": "N",
-                    "plus_minus": "N",
-                    "rank": "N",
-                }
+                resp = leaguedashteamstats.LeagueDashTeamStats(
+                    # core filters
+                    last_n_games=LAST_N_GAMES,              # LastNGames
+                    measure_type_detailed_defense=api_measure,  # MeasureType
+                    month=0,
+                    opponent_team_id=0,
+                    pace_adjust="N",
+                    per_mode_detailed=per_mode,            # PerGame / Per100Possessions
+                    period=0,
+                    plus_minus="N",
+                    rank="N",
+                    season=SEASON,
+                    season_type_all_star=SEASON_TYPE,
 
-                # Season type key drift
-                set_kw(kwargs, C, ["season_type_all_star", "season_type"], SEASON_TYPE)
+                    # “nullable” filters – keep them off unless we need them
+                    conference_nullable=None,
+                    date_from_nullable=None,
+                    date_to_nullable=None,
+                    division_simple_nullable=None,
+                    game_scope_simple_nullable=None,       # IMPORTANT: don’t set "Last 10" here
+                    game_segment_nullable=None,
+                    league_id_nullable="00",               # NBA only
+                    location_nullable=None,
+                    outcome_nullable=None,
+                    po_round_nullable=None,
+                    player_experience_nullable=None,
+                    player_position_abbreviation_nullable=None,
+                    season_segment_nullable=None,
+                    shot_clock_range_nullable=None,
+                    starter_bench_nullable=None,
+                    team_id_nullable=None,
+                    two_way_nullable=0,
+                    vs_conference_nullable=None,
+                    vs_division_nullable=None,
 
-                # Per-mode key drift
-                set_kw(kwargs, C, ["per_mode_detailed", "per_mode"], per_mode)
+                    # transport
+                    proxy=None,        # we’re using env proxies via use_proxy()
+                    headers=None,
+                    timeout=None,
+                    get_request=True,
+                )
 
-                # Measure type drift (defense-only kw on some builds)
-                if not set_kw(
-                    kwargs,
-                    C,
-                    ["measure_type_detailed_defense", "measure_type_detailed", "measure_type"],
-                    api_measure,
-                ):
-                    raise RuntimeError("No compatible measure_type kw found")
-
-                # Use Season Segment for Last N Games (how the website does it)
-                if season_segment_value:
-                    set_kw(
-                        kwargs,
-                        C,
-                        ["season_segment_nullable", "season_segment"],
-                        season_segment_value,
-                    )
-
-                resp = C(**kwargs)
-                df = resp.get_data_frames()[0]
+                df_list = resp.get_data_frames()
+                if not df_list:
+                    raise RuntimeError("No data frames returned")
+                df = df_list[0]
                 if df is None or df.empty:
                     raise RuntimeError("Empty dataframe from API")
+
+                # At this point df should be 30 rows (NBA only), GP ~= LAST_N_GAMES
                 return df
 
         except Exception as e:
             if attempt == 7:
+                # let caller log it
                 raise
-            print(f"[general retry {attempt}] {api_measure} {per_mode}: {e}")
+            print(f"[general retry {attempt}] {measure_label} {per_mode}: {e}")
             sleep_backoff(attempt)
 
 
