@@ -29,7 +29,11 @@ import pytz
 # =========================
 SEASON           = os.getenv("SEASON", "2025-26")
 SEASON_TYPE      = os.getenv("SEASON_TYPE", "Regular Season")
-LAST_N_GAMES     = int(os.getenv("LAST_N_GAMES", "10"))
+# General (non-clutch) sample size
+LAST_N_GAMES         = int(os.getenv("LAST_N_GAMES", "10"))      # e.g. 10
+
+# Clutch sample size (can be different)
+CLUTCH_LAST_N_GAMES  = int(os.getenv("CLUTCH_LAST_N_GAMES", "15"))  # e.g. 15
 SPREADSHEET_NAME = os.getenv("SPREADSHEET_NAME", "NBA Model")
 # ADD THIS:
 LEAGUE_ID        = os.getenv("LEAGUE_ID", "00")  # "00" = NBA only
@@ -314,7 +318,7 @@ def fetch_clutch(per_mode: str, measure_label: str) -> pd.DataFrame:
     Uses:
       - per_mode_detailed
       - measure_type_detailed_defense
-      - last_n_games (for L10 clutch sample)
+      - last_n_games (for Lx clutch sample)
     """
     api_measure = CLUTCH_LABEL_TO_API[measure_label]
 
@@ -329,7 +333,7 @@ def fetch_clutch(per_mode: str, measure_label: str) -> pd.DataFrame:
                     clutch_time=CLUTCH_TIME,
                     ahead_behind=AHEAD_BEHIND,
                     point_diff=POINT_DIFF,
-                    last_n_games=LAST_N_GAMES,
+                    last_n_games=CLUTCH_LAST_N_GAMES,           # <-- only change
                     pace_adjust="N",
                     plus_minus="N",
                     rank="N",
@@ -390,7 +394,7 @@ def main():
     # CLUTCH
     for per_mode in PER_MODES:
         for label in CLUTCH_MEASURE_TYPES:
-            tab = f"NBA_CLUTCH_{label}_{per_mode}_L{LAST_N_GAMES}"
+            tab = f"NBA_CLUTCH_{label}_{per_mode}_L{CLUTCH_LAST_N_GAMES}"
             try:
                 df = fetch_clutch(per_mode, label)
                 write_df(sh, tab, df)
