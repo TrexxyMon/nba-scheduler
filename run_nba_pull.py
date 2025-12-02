@@ -33,7 +33,7 @@ SEASON_TYPE      = os.getenv("SEASON_TYPE", "Regular Season")
 LAST_N_GAMES         = int(os.getenv("LAST_N_GAMES", "10"))      # e.g. 10
 
 # Clutch sample size (can be different)
-CLUTCH_LAST_N_GAMES  = int(os.getenv("CLUTCH_LAST_N_GAMES", "15"))  # e.g. 15
+CLUTCH_LAST_N_GAMES  = int(os.getenv("CLUTCH_LAST_N_GAMES", "18"))  # e.g. 15
 SPREADSHEET_NAME = os.getenv("SPREADSHEET_NAME", "NBA Model")
 # ADD THIS:
 LEAGUE_ID        = os.getenv("LEAGUE_ID", "00")  # "00" = NBA only
