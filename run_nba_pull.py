@@ -333,7 +333,7 @@ def fetch_clutch(per_mode: str, measure_label: str) -> pd.DataFrame:
                     clutch_time=CLUTCH_TIME,
                     ahead_behind=AHEAD_BEHIND,
                     point_diff=POINT_DIFF,
-                    last_n_games=CLUTCH_LAST_N_GAMES,           # <-- only change
+                    last_n_games=int(CLUTCH_LAST_N_GAMES),
                     pace_adjust="N",
                     plus_minus="N",
                     rank="N",
