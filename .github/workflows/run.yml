@@ -47,8 +47,15 @@ jobs:
           SPREADSHEET_NAME: "NBA Model"
           SEASON: "2025-26"
           SEASON_TYPE: "Regular Season"
-          LAST_N_GAMES: "10"
-          CLUTCH_LAST_N_GAMES: "18"
+
+          # General sample windows (Per100 only in script)
+          LAST_N_GAMES: "10"              # legacy default
+          LAST_N_GAMES_LIST: "10,15,20"   # L10, L15, L20
+
+          # Clutch sample windows (Per100 only in script)
+          CLUTCH_LAST_N_GAMES: "20"       # legacy default
+          CLUTCH_LAST_N_GAMES_LIST: "10,20"  # L10 and L20 clutch
+
           LEAGUE_ID: "00"
 
           # Clutch config
