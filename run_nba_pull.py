@@ -4,14 +4,14 @@
 """
 NBA Stats → Google Sheets automation
 - 2025-26 Regular Season
-- Last 10 games (overall; no location split)
-- PerGame & Per100Possessions
-- General (Advanced, Four Factors, Misc, Scoring, Opponent, Defense) + Clutch (Advanced, Four Factors, Misc, Scoring, Opponent)
+- Last N games (L10, L15, L20) – Per100 possessions only
+- General (Advanced, Four Factors, Misc, Scoring, Opponent, Defense)
+- Clutch (Advanced, Four Factors, Misc, Scoring, Opponent) for L10 & L20
 - Writes to Google Sheet "NBA Model" (configurable)
 - Run Log tab with outcomes and notes
 - Sheets API write throttling to avoid 429s
 - Optional proxy rotation for NBA API
-- 6AM New York daily guard (bypass with RUN_ANYTIME=1)
+- 6–8 AM New York daily guard (bypass with RUN_ANYTIME=1)
 """
 
 import os
@@ -27,20 +27,35 @@ import pytz
 # =========================
 # ENV / CONFIG
 # =========================
-SEASON           = os.getenv("SEASON", "2025-26")
-SEASON_TYPE      = os.getenv("SEASON_TYPE", "Regular Season")
-# General (non-clutch) sample size
-LAST_N_GAMES         = int(os.getenv("LAST_N_GAMES", "10"))      # e.g. 10
+SEASON      = os.getenv("SEASON", "2025-26")
+SEASON_TYPE = os.getenv("SEASON_TYPE", "Regular Season")
 
-# Clutch sample size (can be different)
-CLUTCH_LAST_N_GAMES  = int(os.getenv("CLUTCH_LAST_N_GAMES", "18"))  # e.g. 15
+# General (non-clutch) sample size (single value, for backwards compatibility)
+LAST_N_GAMES = int(os.getenv("LAST_N_GAMES", "10"))  # e.g. 10
+
+# Comma-separated list for multiple general windows, e.g. "10,15,20"
+LAST_N_GAMES_LIST = [
+    int(x.strip())
+    for x in os.getenv("LAST_N_GAMES_LIST", str(LAST_N_GAMES)).split(",")
+    if x.strip()
+]
+
+# Clutch sample size (single default)
+CLUTCH_LAST_N_GAMES = int(os.getenv("CLUTCH_LAST_N_GAMES", "20"))  # e.g. 20
+
+# Comma-separated list for multiple clutch windows, e.g. "10,20"
+CLUTCH_LAST_N_GAMES_LIST = [
+    int(x.strip())
+    for x in os.getenv("CLUTCH_LAST_N_GAMES_LIST", str(CLUTCH_LAST_N_GAMES)).split(",")
+    if x.strip()
+]
+
 SPREADSHEET_NAME = os.getenv("SPREADSHEET_NAME", "NBA Model")
-# ADD THIS:
 LEAGUE_ID        = os.getenv("LEAGUE_ID", "00")  # "00" = NBA only
 
-CLUTCH_TIME      = os.getenv("CLUTCH_TIME", "Last 5 Minutes")
-AHEAD_BEHIND     = os.getenv("AHEAD_BEHIND", "Ahead or Behind")
-POINT_DIFF       = int(os.getenv("POINT_DIFF", "5"))
+CLUTCH_TIME  = os.getenv("CLUTCH_TIME", "Last 5 Minutes")
+AHEAD_BEHIND = os.getenv("AHEAD_BEHIND", "Ahead or Behind")
+POINT_DIFF   = int(os.getenv("POINT_DIFF", "5"))
 
 # Optional proxies (comma-separated ports in PROXY_PORTS)
 PROXY_USER  = os.getenv("PROXY_USER", "")
@@ -48,7 +63,8 @@ PROXY_PASS  = os.getenv("PROXY_PASS", "")
 PROXY_HOST  = os.getenv("PROXY_HOST", "")
 PROXY_PORTS = [p.strip() for p in os.getenv("PROXY_PORTS", "").split(",") if p.strip()]
 
-PER_MODES = ["PerGame", "Per100Possessions"]
+# We only want Per100 possessions now
+PER_MODES = ["Per100Possessions"]
 
 GENERAL_MEASURE_TYPES = ["Advanced", "FourFactors", "Misc", "Scoring", "Opponent", "Defense"]
 GENERAL_LABEL_TO_API = {
@@ -78,7 +94,7 @@ def sheets_pause():
 # Run Log
 RUN_LOG_SHEET     = os.getenv("RUN_LOG_SHEET", "Run_Log")
 RUN_LOG_KEEP_LAST = int(os.getenv("RUN_LOG_KEEP_LAST", "5000"))
-RUN_ANYTIME       = os.getenv("RUN_ANYTIME", "0")  # "1" bypasses 6am guard (useful for manual runs)
+RUN_ANYTIME       = os.getenv("RUN_ANYTIME", "0")  # "1" bypasses 6–8am guard
 DEBUG_NBA_SIGNATURES = os.getenv("DEBUG_NBA_SIGNATURES", "0")  # "1" to print constructor params
 NY_TZ = pytz.timezone("America/New_York")
 RUN_LOG = []  # rows: [timestamp_ny, status, tab, note]
@@ -126,7 +142,11 @@ def write_df(sh, title: str, df: pd.DataFrame):
         ws = sh.worksheet(title)
     except gspread.WorksheetNotFound:
         sheets_pause()
-        ws = sh.add_worksheet(title=title, rows=max(len(df)+5, 50), cols=max(len(df.columns)+5, 26))
+        ws = sh.add_worksheet(
+            title=title,
+            rows=max(len(df) + 5, 50),
+            cols=max(len(df.columns) + 5, 26),
+        )
     sheets_pause()
     ws.clear()
     if df.empty:
@@ -220,7 +240,7 @@ def dump_signatures():
         print("🧭 LeagueDashTeamClutch params:", c_params)
     except Exception as e:
         print("🧭 Param dump failed:", e)
-        
+
 def set_kw(kwargs: dict, cls, candidates, value) -> bool:
     """
     Try each candidate name against the class constructor.
@@ -233,17 +253,16 @@ def set_kw(kwargs: dict, cls, candidates, value) -> bool:
             kwargs[name] = value
             return True
     return False
-    
+
 # =========================
 # FETCHERS
 # =========================
-def fetch_general(per_mode: str, measure_label: str) -> pd.DataFrame:
+def fetch_general(per_mode: str, measure_label: str, last_n_games: int) -> pd.DataFrame:
     """
     LeagueDashTeamStats for GENERAL (Advanced/FourFactors/Misc/Scoring/Opponent/Defense)
-    using the exact arg names from the current nba_api signatures.
 
     - Filters to NBA only (league_id_nullable='00')
-    - Uses last_n_games for the Last N Games filter
+    - Uses last_n_games for the Last N Games filter (L10 / L15 / L20)
     """
 
     api_measure = GENERAL_LABEL_TO_API[measure_label]
@@ -253,12 +272,12 @@ def fetch_general(per_mode: str, measure_label: str) -> pd.DataFrame:
             with use_proxy():
                 resp = leaguedashteamstats.LeagueDashTeamStats(
                     # core filters
-                    last_n_games=LAST_N_GAMES,              # LastNGames
-                    measure_type_detailed_defense=api_measure,  # MeasureType
+                    last_n_games=last_n_games,                 # Last N Games
+                    measure_type_detailed_defense=api_measure, # MeasureType
                     month=0,
                     opponent_team_id=0,
                     pace_adjust="N",
-                    per_mode_detailed=per_mode,            # PerGame / Per100Possessions
+                    per_mode_detailed=per_mode,                # Per100Possessions
                     period=0,
                     plus_minus="N",
                     rank="N",
@@ -272,7 +291,7 @@ def fetch_general(per_mode: str, measure_label: str) -> pd.DataFrame:
                     division_simple_nullable=None,
                     game_scope_simple_nullable=None,       # IMPORTANT: don’t set "Last 10" here
                     game_segment_nullable=None,
-                    league_id_nullable="00",               # NBA only
+                    league_id_nullable=LEAGUE_ID,          # NBA only (usually "00")
                     location_nullable=None,
                     outcome_nullable=None,
                     po_round_nullable=None,
@@ -300,25 +319,25 @@ def fetch_general(per_mode: str, measure_label: str) -> pd.DataFrame:
                 if df is None or df.empty:
                     raise RuntimeError("Empty dataframe from API")
 
-                # At this point df should be 30 rows (NBA only), GP ~= LAST_N_GAMES
+                # At this point df should be 30 rows (NBA only), GP ~= last_n_games
                 return df
 
         except Exception as e:
             if attempt == 7:
                 # let caller log it
                 raise
-            print(f"[general retry {attempt}] {measure_label} {per_mode}: {e}")
+            print(f"[general retry {attempt}] {measure_label} {per_mode} L{last_n_games}: {e}")
             sleep_backoff(attempt)
 
 
-def fetch_clutch(per_mode: str, measure_label: str) -> pd.DataFrame:
+def fetch_clutch(per_mode: str, measure_label: str, last_n_games: int) -> pd.DataFrame:
     """
-    LeagueDashTeamClutch caller for this specific nba_api build.
+    LeagueDashTeamClutch caller.
 
     Uses:
-      - per_mode_detailed
+      - per_mode_detailed = Per100Possessions
       - measure_type_detailed_defense
-      - last_n_games (for Lx clutch sample)
+      - last_n_games (for L10 / L20 clutch sample)
     """
     api_measure = CLUTCH_LABEL_TO_API[measure_label]
 
@@ -328,12 +347,12 @@ def fetch_clutch(per_mode: str, measure_label: str) -> pd.DataFrame:
                 resp = leaguedashteamclutch.LeagueDashTeamClutch(
                     season=SEASON,
                     season_type_all_star=SEASON_TYPE,
-                    per_mode_detailed=per_mode,                 # "PerGame" / "Per100Possessions"
+                    per_mode_detailed=per_mode,                 # "Per100Possessions"
                     measure_type_detailed_defense=api_measure,  # "Advanced", "Four Factors", etc.
                     clutch_time=CLUTCH_TIME,
                     ahead_behind=AHEAD_BEHIND,
                     point_diff=POINT_DIFF,
-                    last_n_games=int(CLUTCH_LAST_N_GAMES),
+                    last_n_games=int(last_n_games),
                     pace_adjust="N",
                     plus_minus="N",
                     rank="N",
@@ -352,9 +371,8 @@ def fetch_clutch(per_mode: str, measure_label: str) -> pd.DataFrame:
         except Exception as e:
             if attempt == 7:
                 raise
-            print(f"[clutch retry {attempt}] {measure_label} {per_mode}: {e}")
+            print(f"[clutch retry {attempt}] {measure_label} {per_mode} L{last_n_games}: {e}")
             sleep_backoff(attempt)
-
 
 
 # =========================
@@ -378,31 +396,33 @@ def main():
             flush_run_log(sh)
             return
 
-    # GENERAL
-    for per_mode in PER_MODES:
-        for label in GENERAL_MEASURE_TYPES:
-            tab = f"NBA_GEN_{label}_{per_mode}_L{LAST_N_GAMES}"
-            try:
-                df = fetch_general(per_mode, label)
-                write_df(sh, tab, df)
-                log_result(tab, "OK", f"{len(df)} rows")
-                sheets_pause()
-            except Exception as e:
-                print(f"❌ {tab} -> {e}")
-                log_result(tab, "FAIL", str(e))
+    # GENERAL – Per100 only, multiple Last N windows (L10, L15, L20)
+    for per_mode in PER_MODES:  # ["Per100Possessions"]
+        for last_n in LAST_N_GAMES_LIST:  # e.g. [10, 15, 20]
+            for label in GENERAL_MEASURE_TYPES:
+                tab = f"NBA_GEN_{label}_{per_mode}_L{last_n}"
+                try:
+                    df = fetch_general(per_mode, label, last_n)
+                    write_df(sh, tab, df)
+                    log_result(tab, "OK", f"{len(df)} rows")
+                    sheets_pause()
+                except Exception as e:
+                    print(f"❌ {tab} -> {e}")
+                    log_result(tab, "FAIL", str(e))
 
-    # CLUTCH
-    for per_mode in PER_MODES:
-        for label in CLUTCH_MEASURE_TYPES:
-            tab = f"NBA_CLUTCH_{label}_{per_mode}_L{CLUTCH_LAST_N_GAMES}"
-            try:
-                df = fetch_clutch(per_mode, label)
-                write_df(sh, tab, df)
-                log_result(tab, "OK", f"{len(df)} rows")
-                sheets_pause()
-            except Exception as e:
-                print(f"❌ {tab} -> {e}")
-                log_result(tab, "FAIL", str(e))
+    # CLUTCH – Per100 only, L10 & L20 (or whatever is in CLUTCH_LAST_N_GAMES_LIST)
+    for per_mode in PER_MODES:  # ["Per100Possessions"]
+        for last_n in CLUTCH_LAST_N_GAMES_LIST:  # e.g. [10, 20]
+            for label in CLUTCH_MEASURE_TYPES:
+                tab = f"NBA_CLUTCH_{label}_{per_mode}_L{last_n}"
+                try:
+                    df = fetch_clutch(per_mode, label, last_n)
+                    write_df(sh, tab, df)
+                    log_result(tab, "OK", f"{len(df)} rows")
+                    sheets_pause()
+                except Exception as e:
+                    print(f"❌ {tab} -> {e}")
+                    log_result(tab, "FAIL", str(e))
 
     flush_run_log(sh)
     print("✅ Done")
